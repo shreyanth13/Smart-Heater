@@ -65,7 +65,7 @@ void loop() {
       Serial.println("Failed");
       return;
     }
-    Serial.printf("%lums | Temp: %.2f°C | Humidity: %.2f%% | State: %s | Heater: %s\n",
+    Serial.printf("%lums | Temp: %.2fC | Humidity: %.2f%% | State: %s | Heater: %s\n",
                   now, tempC, hum, stateName(state),
                   (digitalRead(HEATER_PIN) ? "ON" : "OFF"));    
     switch (state) {
