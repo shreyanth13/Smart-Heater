@@ -1,0 +1,118 @@
+#include "DHT.h"
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEAdvertising.h>
+#define DHTPIN 21
+#define DHTTYPE DHT22
+#define HEATER_PIN 25
+#define STATUS_LED_PIN 2
+#define BUZZER_PIN 26
+DHT dht(DHTPIN, DHTTYPE);
+BLEAdvertising *pAdvertising;
+enum State { IDLE, HEATING, STABILIZING, TARGET_REACHED, OVERHEAT };
+State state = IDLE;
+const float targetTemp = 28.0;
+const float hysteresis = 0.5;
+const float overheatTemp = 32.0;
+const unsigned long stabilizingTime = 10000;
+unsigned long stabilizeStart = 0;
+unsigned long lastReadTime = 0;
+const unsigned long readInterval = 2000;
+const char* stateName(State s) {
+  switch (s) {
+    case IDLE: return "Idle";
+    case HEATING: return "Heating";
+    case STABILIZING: return "Stabilizing";
+    case TARGET_REACHED: return "Target Reached";
+    case OVERHEAT: return "Overheat";
+    default: return "Unknown";
+  }
+}
+void setOutputs(bool heater) {
+  digitalWrite(HEATER_PIN, heater);
+}
+void setup() {
+  Serial.begin(115200);  
+  pinMode(HEATER_PIN, OUTPUT);
+  pinMode(STATUS_LED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  setOutputs(false);  
+  Serial.println("Started");  
+  dht.begin();
+  // BLE setup
+  //BLEDevice::init("ESP32_Heater");
+  //BLEServer *pServer = BLEDevice::createServer();
+  //BLEService *pService = pServer->createService(SERVICE_UUID);
+  //pCharacteristic = pService->createCharacteristic(
+  //                    CHARACTERISTIC_UUID,
+  //                    BLECharacteristic::PROPERTY_READ |
+  //                    BLECharacteristic::PROPERTY_NOTIFY
+  //                  );
+  //pService->start();
+  
+  //pAdvertising = BLEDevice::getAdvertising();
+ // pAdvertising->addServiceUUID(SERVICE_UUID);
+ // BLEDevice::startAdvertising();
+  //Serial.println("BLE Advertising Started");
+}
+void loop() {
+  unsigned long now = millis();  
+  if (now - lastReadTime >= readInterval) {
+    lastReadTime = now;    
+    float tempC = dht.readTemperature();
+    float hum = dht.readHumidity();    
+    if (isnan(tempC) || isnan(hum)) {
+      Serial.println("Failed");
+      return;
+    }
+    Serial.printf("%lums | Temp: %.2f°C | Humidity: %.2f%% | State: %s | Heater: %s\n",
+                  now, tempC, hum, stateName(state),
+                  (digitalRead(HEATER_PIN) ? "ON" : "OFF"));    
+    switch (state) {
+      case IDLE:
+        setOutputs(false);
+        if (tempC >= overheatTemp) state = OVERHEAT;
+        else if (tempC < targetTemp - hysteresis) state = HEATING;
+        else if (tempC < targetTemp + hysteresis) {
+          state = STABILIZING;
+          stabilizeStart = now;
+        }
+        break;        
+      case HEATING:
+        setOutputs(true);
+        if (tempC >= overheatTemp) state = OVERHEAT;
+        else if (tempC >= targetTemp - hysteresis) {
+          state = STABILIZING;
+          stabilizeStart = now;
+        }
+        break;        
+      case STABILIZING:
+        setOutputs(true);
+        if (tempC >= targetTemp + hysteresis) {
+          state = TARGET_REACHED;
+          setOutputs(false);
+        } else if (now - stabilizeStart >= stabilizingTime) {
+          state = TARGET_REACHED;
+          setOutputs(false);
+        } else if (tempC < targetTemp - hysteresis) {
+          state = HEATING;
+        }
+        break;        
+      case TARGET_REACHED:
+        setOutputs(false);
+        if (tempC >= overheatTemp) state = OVERHEAT;
+        else if (tempC < targetTemp - hysteresis) state = HEATING;
+        break;        
+      case OVERHEAT:
+        setOutputs(false);
+        digitalWrite(BUZZER_PIN, HIGH);
+        digitalWrite(STATUS_LED_PIN, HIGH);
+        if (tempC < targetTemp - 1.0) {
+           digitalWrite(BUZZER_PIN, LOW);
+           digitalWrite(STATUS_LED_PIN, LOW);
+           state = IDLE;
+        }
+        break;
+    }    
+  }
+}
